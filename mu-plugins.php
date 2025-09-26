@@ -474,6 +474,66 @@ Description: Convierte precios de USD a EUR con el tipo oficial del Banco Centra
 Author: Atalanta Academy
 */
 
+function atalanta_is_certificaciones_offsec_page() {
+    return cl_uri_has('/certificaciones-offsec-espanol/');
+}
+
+function atalanta_get_usd_rate_from_ecb() {
+    $cache_key = 'atalanta_ecb_usd_rate';
+
+    $cached_rate = get_transient($cache_key);
+    if ($cached_rate !== false) {
+        return (float) $cached_rate;
+    }
+
+    $backup_rate = get_option($cache_key);
+
+    if (!atalanta_is_certificaciones_offsec_page()) {
+        return $backup_rate ? (float) $backup_rate : new WP_Error(
+            'ecb_out_of_scope',
+            'Error: la conversión USD/EUR solo está disponible en la página de Certificaciones OffSec.'
+        );
+    }
+
+    $response = wp_remote_get(
+        'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml',
+        array(
+            'timeout' => 6,
+        )
+    );
+
+    if (is_wp_error($response)) {
+        return $backup_rate ? (float) $backup_rate : $response;
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    if (empty($body)) {
+        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_empty_body', 'Error: el BCE no devolvió datos.');
+    }
+
+    $xml = simplexml_load_string($body);
+    if (!$xml) {
+        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_invalid_xml', 'Error: no se pudo procesar el XML del BCE.');
+    }
+
+    $rate = null;
+    foreach ($xml->Cube->Cube->Cube as $cube) {
+        if ((string) $cube['currency'] === 'USD') {
+            $rate = (float) $cube['rate'];
+            break;
+        }
+    }
+
+    if (!$rate) {
+        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_missing_rate', 'Error: no se encontró la tasa USD en el BCE.');
+    }
+
+    set_transient($cache_key, $rate, 12 * HOUR_IN_SECONDS);
+    update_option($cache_key, $rate);
+
+    return $rate;
+}
+
 function atalanta_usd_to_eur($atts) {
     $atts = shortcode_atts(array(
         'usd' => 0,
@@ -482,38 +542,15 @@ function atalanta_usd_to_eur($atts) {
     $usd = floatval($atts['usd']);
     if ($usd <= 0) return 'Error: cantidad inválida.';
 
-    // URL oficial del BCE (XML)
-    $response = wp_remote_get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml");
-
-    if (is_wp_error($response)) {
-        return 'Error de conexión: ' . $response->get_error_message();
+    if (!atalanta_is_certificaciones_offsec_page()) {
+        return '';
     }
 
-    $body = wp_remote_retrieve_body($response);
-    if (empty($body)) {
-        return 'Error: el BCE no devolvió datos.';
+    $rate = atalanta_get_usd_rate_from_ecb();
+    if (is_wp_error($rate)) {
+        return 'Error al obtener la tasa USD/EUR: ' . $rate->get_error_message();
     }
 
-    // Parsear XML
-    $xml = simplexml_load_string($body);
-    if (!$xml) {
-        return 'Error: no se pudo procesar el XML del BCE.';
-    }
-
-    // Buscar tasa USD
-    $rate = null;
-    foreach ($xml->Cube->Cube->Cube as $cube) {
-        if ((string)$cube['currency'] === 'USD') {
-            $rate = (float)$cube['rate'];
-            break;
-        }
-    }
-
-    if (!$rate) {
-        return 'Error: no se encontró la tasa USD en el BCE.';
-    }
-
-    // 1 EUR = X USD → convertir USD a EUR
     $eur_value = round($usd / $rate);
 
     return number_format($eur_value, 0, ',', '.') . ' €';
