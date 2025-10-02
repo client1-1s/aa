@@ -335,35 +335,6 @@ add_filter( 'wp_redirect', function( $location, $status ) {
 }, 10, 2 );
 
 
-// Redirigir al dashboard tras login sin interferir con peticiones AJAX/REST
-add_filter('login_redirect', function($redirect_to, $request, $user) {
-    if (!($user instanceof WP_User)) {
-        return $redirect_to;
-    }
-
-    // Evita romper respuestas AJAX/REST/CLI que esperan su propio manejo
-    if (wp_doing_ajax()
-        || (defined('REST_REQUEST') && REST_REQUEST)
-        || (defined('WP_CLI') && WP_CLI)
-    ) {
-        return $redirect_to;
-    }
-
-    $roles = (array) $user->roles;
-    $is_student = in_array('subscriber', $roles, true) || in_array('student', $roles, true);
-
-    if (!$is_student) {
-        return $redirect_to;
-    }
-
-    if (!empty($request)) {
-        return $request;
-    }
-
-    return home_url('/dashboard/?refresh=1');
-}, 20, 3);
-
-
 
 /*
 Plugin Name: Tutor LMS OTP Message Override (ES)
