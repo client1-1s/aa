@@ -335,13 +335,59 @@ add_filter( 'wp_redirect', function( $location, $status ) {
 }, 10, 2 );
 
 
-// Redirigir al dashboard y forzar refresh tras login
-add_action('wp_login', function($user_login, $user) {
-    if (in_array('subscriber', (array) $user->roles) || in_array('student', (array) $user->roles)) {
-        wp_safe_redirect(home_url('/dashboard/?refresh=1'));
-        exit;
+// Redirigir al dashboard tras login sin interferir con peticiones AJAX/REST
+add_filter('login_redirect', function($redirect_to, $request, $user) {
+    if (!($user instanceof WP_User)) {
+        return $redirect_to;
     }
-}, 10, 2);
+
+    // Evita romper respuestas AJAX/REST/CLI que esperan su propio manejo
+    if (wp_doing_ajax()
+        || (defined('REST_REQUEST') && REST_REQUEST)
+        || (defined('WP_CLI') && WP_CLI)
+    ) {
+        return $redirect_to;
+    }
+
+    $roles = (array) $user->roles;
+    $is_student = in_array('subscriber', $roles, true) || in_array('student', $roles, true);
+
+    if (!$is_student) {
+        return $redirect_to;
+    }
+
+    $target = home_url('/dashboard/');
+
+    if (!empty($request)) {
+        $login_path = wp_parse_url($target, PHP_URL_PATH);
+        $request_path = wp_parse_url($request, PHP_URL_PATH);
+
+        if ($login_path && $request_path) {
+            $login_path = untrailingslashit($login_path);
+            $request_path = untrailingslashit($request_path);
+
+            if ($login_path === $request_path) {
+                $query = wp_parse_url($request, PHP_URL_QUERY);
+                $args = [];
+                if (is_string($query)) {
+                    parse_str($query, $args);
+                }
+
+                if (!isset($args['refresh'])) {
+                    $target = add_query_arg('refresh', '1', $target);
+                } else {
+                    $target = $request;
+                }
+
+                return $target;
+            }
+        }
+
+        return $request;
+    }
+
+    return add_query_arg('refresh', '1', $target);
+}, 20, 3);
 
 
 
@@ -482,35 +528,51 @@ function atalanta_usd_to_eur($atts) {
     $usd = floatval($atts['usd']);
     if ($usd <= 0) return 'Error: cantidad inválida.';
 
-    // URL oficial del BCE (XML)
-    $response = wp_remote_get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml");
+    // Intenta reutilizar la tasa durante 12 horas para evitar llamadas remotas en cada carga
+    $rate = get_transient('atalanta_ecb_usd_rate');
 
-    if (is_wp_error($response)) {
-        return 'Error de conexión: ' . $response->get_error_message();
-    }
+    if ($rate === false) {
+        // URL oficial del BCE (XML)
+        $response = wp_remote_get(
+            'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml',
+            array(
+                'timeout' => 5,
+                'user-agent' => 'Atalanta-Academy-Converter/1.0; ' . home_url('/'),
+            )
+        );
 
-    $body = wp_remote_retrieve_body($response);
-    if (empty($body)) {
-        return 'Error: el BCE no devolvió datos.';
-    }
-
-    // Parsear XML
-    $xml = simplexml_load_string($body);
-    if (!$xml) {
-        return 'Error: no se pudo procesar el XML del BCE.';
-    }
-
-    // Buscar tasa USD
-    $rate = null;
-    foreach ($xml->Cube->Cube->Cube as $cube) {
-        if ((string)$cube['currency'] === 'USD') {
-            $rate = (float)$cube['rate'];
-            break;
+        if (is_wp_error($response)) {
+            return 'Error de conexión: ' . $response->get_error_message();
         }
+
+        $body = wp_remote_retrieve_body($response);
+        if (empty($body)) {
+            return 'Error: el BCE no devolvió datos.';
+        }
+
+        // Parsear XML
+        $xml = @simplexml_load_string($body);
+        if (!$xml) {
+            return 'Error: no se pudo procesar el XML del BCE.';
+        }
+
+        // Buscar tasa USD
+        foreach ($xml->Cube->Cube->Cube as $cube) {
+            if ((string) $cube['currency'] === 'USD') {
+                $rate = (float) $cube['rate'];
+                break;
+            }
+        }
+
+        if (!$rate) {
+            return 'Error: no se encontró la tasa USD en el BCE.';
+        }
+
+        set_transient('atalanta_ecb_usd_rate', $rate, 12 * HOUR_IN_SECONDS);
     }
 
-    if (!$rate) {
-        return 'Error: no se encontró la tasa USD en el BCE.';
+    if (!$rate || $rate <= 0) {
+        return 'Error: la tasa USD del BCE no es válida.';
     }
 
     // 1 EUR = X USD → convertir USD a EUR
