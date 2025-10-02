@@ -359,27 +359,26 @@ add_filter('login_redirect', function($redirect_to, $request, $user) {
     $target = home_url('/dashboard/');
 
     if (!empty($request)) {
-        $login_path = wp_parse_url($target, PHP_URL_PATH);
+        $login_path   = wp_parse_url($target, PHP_URL_PATH);
         $request_path = wp_parse_url($request, PHP_URL_PATH);
 
         if ($login_path && $request_path) {
-            $login_path = untrailingslashit($login_path);
+            $login_path   = untrailingslashit($login_path);
             $request_path = untrailingslashit($request_path);
 
             if ($login_path === $request_path) {
                 $query = wp_parse_url($request, PHP_URL_QUERY);
-                $args = [];
+                $args  = [];
+
                 if (is_string($query)) {
                     parse_str($query, $args);
                 }
 
                 if (!isset($args['refresh'])) {
-                    $target = add_query_arg('refresh', '1', $target);
-                } else {
-                    $target = $request;
+                    return add_query_arg('refresh', '1', $request);
                 }
 
-                return $target;
+                return $request;
             }
         }
 
