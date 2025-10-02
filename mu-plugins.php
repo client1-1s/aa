@@ -474,66 +474,6 @@ Description: Convierte precios de USD a EUR con el tipo oficial del Banco Centra
 Author: Atalanta Academy
 */
 
-function atalanta_is_certificaciones_offsec_page() {
-    return cl_uri_has('/certificaciones-offsec-espanol/');
-}
-
-function atalanta_get_usd_rate_from_ecb() {
-    $cache_key = 'atalanta_ecb_usd_rate';
-
-    $cached_rate = get_transient($cache_key);
-    if ($cached_rate !== false) {
-        return (float) $cached_rate;
-    }
-
-    $backup_rate = get_option($cache_key);
-
-    if (!atalanta_is_certificaciones_offsec_page()) {
-        return $backup_rate ? (float) $backup_rate : new WP_Error(
-            'ecb_out_of_scope',
-            'Error: la conversión USD/EUR solo está disponible en la página de Certificaciones OffSec.'
-        );
-    }
-
-    $response = wp_remote_get(
-        'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml',
-        array(
-            'timeout' => 6,
-        )
-    );
-
-    if (is_wp_error($response)) {
-        return $backup_rate ? (float) $backup_rate : $response;
-    }
-
-    $body = wp_remote_retrieve_body($response);
-    if (empty($body)) {
-        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_empty_body', 'Error: el BCE no devolvió datos.');
-    }
-
-    $xml = simplexml_load_string($body);
-    if (!$xml) {
-        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_invalid_xml', 'Error: no se pudo procesar el XML del BCE.');
-    }
-
-    $rate = null;
-    foreach ($xml->Cube->Cube->Cube as $cube) {
-        if ((string) $cube['currency'] === 'USD') {
-            $rate = (float) $cube['rate'];
-            break;
-        }
-    }
-
-    if (!$rate) {
-        return $backup_rate ? (float) $backup_rate : new WP_Error('ecb_missing_rate', 'Error: no se encontró la tasa USD en el BCE.');
-    }
-
-    set_transient($cache_key, $rate, 12 * HOUR_IN_SECONDS);
-    update_option($cache_key, $rate);
-
-    return $rate;
-}
-
 function atalanta_usd_to_eur($atts) {
     $atts = shortcode_atts(array(
         'usd' => 0,
@@ -542,15 +482,38 @@ function atalanta_usd_to_eur($atts) {
     $usd = floatval($atts['usd']);
     if ($usd <= 0) return 'Error: cantidad inválida.';
 
-    if (!atalanta_is_certificaciones_offsec_page()) {
-        return '';
+    // URL oficial del BCE (XML)
+    $response = wp_remote_get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml");
+
+    if (is_wp_error($response)) {
+        return 'Error de conexión: ' . $response->get_error_message();
     }
 
-    $rate = atalanta_get_usd_rate_from_ecb();
-    if (is_wp_error($rate)) {
-        return 'Error al obtener la tasa USD/EUR: ' . $rate->get_error_message();
+    $body = wp_remote_retrieve_body($response);
+    if (empty($body)) {
+        return 'Error: el BCE no devolvió datos.';
     }
 
+    // Parsear XML
+    $xml = simplexml_load_string($body);
+    if (!$xml) {
+        return 'Error: no se pudo procesar el XML del BCE.';
+    }
+
+    // Buscar tasa USD
+    $rate = null;
+    foreach ($xml->Cube->Cube->Cube as $cube) {
+        if ((string)$cube['currency'] === 'USD') {
+            $rate = (float)$cube['rate'];
+            break;
+        }
+    }
+
+    if (!$rate) {
+        return 'Error: no se encontró la tasa USD en el BCE.';
+    }
+
+    // 1 EUR = X USD → convertir USD a EUR
     $eur_value = round($usd / $rate);
 
     return number_format($eur_value, 0, ',', '.') . ' €';
@@ -658,10 +621,12 @@ add_filter('tutor_dashboard/instructor_nav_items', 'atalanta_replace_qna_tab', 9
 
 
 /*
-    *Mover el campo “Mostrar el nombre públicamente como” arriba de Nombre/Apellido.
-    *Ocultar el texto por defecto de Tutor LMS (“El nombre a mostrar se visualiza en todos los campos públicos…”).
-    *Añadir nuestro aviso en rojo corporativo.
-*/
+ * Ajustes en perfil de usuario Tutor LMS
+ * - Mover el campo "Mostrar el nombre públicamente como"
+ * - Ocultar mensaje por defecto
+ * - Añadir aviso personalizado
+ * - Ocultar el campo de teléfono
+ */
 
 add_action('wp_footer', function () {
     if ( isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/dashboard/settings') !== false ) : ?>
@@ -700,7 +665,97 @@ document.addEventListener("DOMContentLoaded", function() {
     notice.style.cssText = "margin-top:8px;font-size:13px;color:#000;font-weight:500;";
     notice.innerHTML = "⚠️ Este campo define cómo aparecerá tu nombre en el <b>certificado</b>.";
     displayRow.appendChild(notice);
+
+
 });
 </script>
 <?php endif;
 });
+
+
+
+/**
+ * Checkout Atalanta Academy - Ajustes definitivos con enlace fijo
+ */
+
+// 1. Limitar campos de facturación
+add_filter('woocommerce_checkout_fields', function($fields) {
+
+    // Quitamos los que no usas
+    unset($fields['billing']['billing_address_1']);
+    unset($fields['billing']['billing_address_2']);
+    unset($fields['billing']['billing_city']);
+    unset($fields['billing']['billing_postcode']);
+    unset($fields['billing']['billing_phone']);
+
+    // Empresa
+    $fields['billing']['billing_company'] = array(
+        'type'     => 'text',
+        'label'    => 'Nombre de la empresa',
+        'required' => false,
+        'class'    => array('form-row-first'),
+        'priority' => 20,
+    );
+
+    // CIF
+    $fields['billing']['billing_cif'] = array(
+        'type'     => 'text',
+        'label'    => 'CIF',
+        'required' => false,
+        'class'    => array('form-row-last'),
+        'priority' => 21,
+    );
+
+    return $fields;
+});
+
+// 2. Checkbox "¿Quieres factura?"
+add_action('woocommerce_after_checkout_billing_form', function($checkout) {
+    echo '<div id="factura-checkbox">';
+    woocommerce_form_field('need_invoice', array(
+        'type'  => 'checkbox',
+        'label' => '¿Quieres factura?',
+        'required' => false,
+    ), $checkout->get_value('need_invoice'));
+    echo '</div>';
+});
+
+// 3. Validación: si marcan factura, empresa y CIF son obligatorios
+add_action('woocommerce_after_checkout_validation', function($data, $errors) {
+    if (!empty($data['need_invoice'])) {
+        if (empty($data['billing_company'])) {
+            $errors->add('billing_company', 'El campo "Nombre de la empresa" es obligatorio para emitir factura.');
+        }
+        if (empty($data['billing_cif'])) {
+            $errors->add('billing_cif', 'El campo "CIF" es obligatorio para emitir factura.');
+        }
+    }
+}, 10, 2);
+
+// 4. Quitar "(opcional)" de todos los campos
+add_filter('woocommerce_form_field', function($field, $key, $args, $value) {
+    $field = str_replace('<span class="optional">(opcional)</span>', '', $field);
+    $field = str_replace('<span class="optional">(' . __('optional', 'woocommerce') . ')</span>', '', $field);
+    return $field;
+}, 10, 4);
+
+// 5. Ocultar checkbox de Stripe "Guardar información de pago..."
+add_filter('woocommerce_payment_tokens_enabled', '__return_false');
+add_action('wp_head', function() {
+    if (is_checkout()) {
+        echo '<style>
+            #wc-stripe-new-payment-method,
+            label[for="wc-stripe-new-payment-method"],
+            .woocommerce-SavedPaymentMethods-saveNew { display:none !important; }
+        </style>';
+    }
+});
+
+// 6. Política de privacidad en español con enlace fijo
+add_filter('woocommerce_get_privacy_policy_text', function($text, $type) {
+    if ($type === 'checkout') {
+        $link = 'https://atalantaacademy.com/politica-de-privacidad/';
+        return 'Tus datos personales se utilizarán para procesar tu pedido, mejorar tu experiencia en esta web y para otros fines descritos en nuestra <a href="' . esc_url($link) . '" class="woocommerce-privacy-policy-link" target="_blank">política de privacidad</a>.';
+    }
+    return $text;
+}, 10, 2);
