@@ -174,7 +174,7 @@ add_action('wp_footer', function(){
     (function(){
       var STYLE_ID = 'cl-login-keep-error';
       var ERROR_TEXT = 'Credenciales no válidas. Inténtalo de nuevo.';
-      var ERROR_SELECTORS = '.tutor-alert-danger, .tutor-alert-error, .tutor-alert-warning, .tutor-warning, .tutor-error, .tutor-message-error, .notice-error, .error, .tutor-login-error';
+      var ERROR_SELECTORS = '.tutor-alert-danger, .tutor-alert-error, .tutor-error, .tutor-message-error, .notice-error, .error, .tutor-login-error';
 
       function ensureStyle(){
         if (!document.getElementById(STYLE_ID)) {
@@ -213,8 +213,21 @@ add_action('wp_footer', function(){
         ensureStyle();
         var errorBox = container.querySelector(ERROR_SELECTORS);
         if (errorBox) {
-          container.classList.add('cl-login-has-error');
-          normalizeMessage(errorBox);
+          var classList = errorBox.classList;
+          var isActualError = classList.contains('tutor-alert-danger')
+                          || classList.contains('tutor-alert-error')
+                          || classList.contains('tutor-error')
+                          || classList.contains('tutor-message-error')
+                          || classList.contains('notice-error')
+                          || classList.contains('error')
+                          || classList.contains('tutor-login-error');
+
+          if (isActualError) {
+            container.classList.add('cl-login-has-error');
+            normalizeMessage(errorBox);
+          } else {
+            container.classList.remove('cl-login-has-error');
+          }
         } else {
           container.classList.remove('cl-login-has-error');
         }
