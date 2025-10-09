@@ -165,6 +165,79 @@ add_filter('login_errors', function($msg){
     return __('Credenciales no válidas. Inténtalo de nuevo.', 'atalanta');
 });
 
+// Evita que los avisos de éxito sobreescriban el error de login
+add_action('wp_footer', function(){
+    if (is_user_logged_in()) return;
+
+    ?>
+    <script>
+    (function(){
+      var STYLE_ID = 'cl-login-keep-error';
+      var ERROR_TEXT = 'Credenciales no válidas. Inténtalo de nuevo.';
+      var ERROR_SELECTORS = '.tutor-alert-danger, .tutor-alert-error, .tutor-alert-warning, .tutor-warning, .tutor-error, .tutor-message-error, .notice-error, .error, .tutor-login-error';
+
+      function ensureStyle(){
+        if (!document.getElementById(STYLE_ID)) {
+          var css = document.createElement('style');
+          css.id = STYLE_ID;
+          css.textContent = '.cl-login-has-error .tutor-alert-success, .cl-login-has-error .tutor-success, .cl-login-has-error .tutor-message-success{display:none!important;}';
+          document.head.appendChild(css);
+        }
+      }
+
+      function getContainer(){
+        var form = document.getElementById('tutor-login-form')
+                || document.querySelector('form[action*="tutor_login" i]');
+        if (!form) {
+          var field = document.querySelector('form input[name="tutor_action"][value="tutor_user_login"]');
+          if (field) form = field.closest('form');
+        }
+        if (!form) return null;
+        return form.closest('.tutor-login-form-wrapper') || form.closest('.tutor-login-form') || form.parentNode;
+      }
+
+      function normalizeMessage(node){
+        if (!node) return;
+        var textNode = node.querySelector('.tutor-alert-text span:not(.tutor-alert-icon)')
+                    || node.querySelector('.tutor-alert-text')
+                    || node;
+        var current = textNode.textContent.trim();
+        if (!current || /inicia sesi[oó]n/i.test(current) || /crea una cuenta/i.test(current)) {
+          textNode.textContent = ERROR_TEXT;
+        }
+      }
+
+      function refresh(){
+        var container = getContainer();
+        if (!container) return;
+        ensureStyle();
+        var errorBox = container.querySelector(ERROR_SELECTORS);
+        if (errorBox) {
+          container.classList.add('cl-login-has-error');
+          normalizeMessage(errorBox);
+        } else {
+          container.classList.remove('cl-login-has-error');
+        }
+      }
+
+      function init(){
+        refresh();
+        var target = getContainer() || document.documentElement;
+        var observer = new MutationObserver(refresh);
+        observer.observe(target, {childList:true, subtree:true, characterData:true});
+        setTimeout(function(){ try{ observer.disconnect(); }catch(e){}; }, 8000);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+    })();
+    </script>
+    <?php
+}, 25);
+
 /* ---------------------------------------------
    5) Contraseña fuerte (reset password)
 ----------------------------------------------*/
